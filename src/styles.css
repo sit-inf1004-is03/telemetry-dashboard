@@ -1,0 +1,312 @@
+/* Colours are set once here, for light and dark mode; everything below uses the names. */
+:root {
+  color-scheme: light;
+  --surface-0: #f3f2ee;
+  --surface-1: #fcfcfb;
+  --text-primary: #0b0b0b;
+  --text-secondary: #52514e;
+  --text-muted: #6f6e69;
+  --line: #e1e0d9;
+  --series: #2a78d6;
+  --good: #008300;
+  --bad: #c42b1c;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --surface-0: #111110;
+    --surface-1: #1a1a19;
+    --text-primary: #f0efec;
+    --text-secondary: #c3c2b7;
+    --text-muted: #9a9890;
+    --line: #2c2c2a;
+    --series: #3987e5;
+    --good: #3fb950;
+    --bad: #f0645a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--surface-0);
+  color: var(--text-primary);
+  font:
+    14px/1.45 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+}
+h1 {
+  font-size: 18px;
+  margin: 0;
+}
+h2 {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+h3 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin: 16px 0 8px;
+}
+h3:first-child {
+  margin-top: 0;
+}
+code {
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.muted {
+  color: var(--text-muted);
+}
+.small {
+  font-size: 12px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+  color: inherit;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+button {
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  border-color: var(--series);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.danger {
+  background: var(--bad);
+  border-color: var(--bad);
+  color: #fff;
+  font-weight: 600;
+}
+input[type="number"] {
+  width: 90px;
+}
+
+/* Page layout */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+}
+.topbar .danger {
+  margin-left: auto;
+}
+.layout {
+  display: grid;
+  grid-template-columns: 200px 1fr;
+  gap: 16px;
+  padding: 16px;
+}
+.columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+}
+@media (max-width: 900px) {
+  .layout,
+  .columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.panel {
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+  min-width: 0;
+}
+
+/* Status */
+.pill {
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 999px;
+  padding: 2px 10px;
+  border: 1px solid currentColor;
+}
+.pill.connected {
+  color: var(--good);
+}
+.pill.connecting {
+  color: var(--text-muted);
+}
+.pill.disconnected {
+  color: var(--bad);
+}
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.dot.online {
+  background: var(--good);
+}
+.dot.offline {
+  background: var(--text-muted);
+}
+
+/* Car list */
+.car-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 6px;
+  text-align: left;
+}
+.car-tab .muted {
+  margin-left: auto;
+  font-size: 12px;
+}
+.car-tab.selected {
+  border-color: var(--series);
+  box-shadow: inset 3px 0 0 var(--series);
+}
+.car.empty {
+  padding: 32px;
+}
+
+/* Telemetry */
+.flags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0 12px;
+}
+.flag {
+  font-size: 12px;
+  color: var(--text-muted);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.flag.on {
+  color: var(--text-primary);
+  border-color: var(--text-secondary);
+  font-weight: 600;
+}
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 12px;
+}
+.tile {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+}
+.tile-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.tile-value {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.sparkline svg {
+  display: block;
+  width: 100%;
+  height: 40px;
+  cursor: crosshair;
+}
+.sparkline .series {
+  fill: none;
+  stroke: var(--series);
+  stroke-width: 2px;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.sparkline .baseline,
+.sparkline .crosshair {
+  stroke: var(--line);
+  stroke-width: 1px;
+  vector-effect: non-scaling-stroke;
+}
+.sparkline .crosshair {
+  stroke: var(--text-muted);
+}
+.sparkline-plot {
+  position: relative;
+  margin-top: 6px;
+}
+.sparkline .marker {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  margin: -5px 0 0 -5px;
+  border-radius: 50%;
+  background: var(--series);
+  border: 2px solid var(--surface-1);
+  pointer-events: none;
+}
+.sparkline-readout {
+  min-height: 1.4em;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Commands */
+.row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--line);
+}
+.command-name {
+  min-width: 150px;
+  align-self: center;
+  font-weight: 500;
+}
+.arg {
+  display: flex;
+  flex-direction: column;
+}
+.grow {
+  flex: 1;
+  min-width: 120px;
+}
+
+/* Log */
+.log {
+  height: 420px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.log-line {
+  padding: 1px 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.log-line time {
+  color: var(--text-muted);
+}
+.log-line.sent {
+  color: var(--series);
+}

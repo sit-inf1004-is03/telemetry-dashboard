@@ -1,0 +1,36 @@
+{
+  "name": "mqtt-web-interface",
+  "version": "1.0.0",
+  "description": "MQTT broker and dashboard for the robocar MQTT client (Pico W)",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "node --watch-path=server --watch-path=src/shared server/main.ts --dev",
+    "build": "vite build",
+    "start": "vite build && node server/main.ts",
+    "simulate": "node scripts/fake-car.ts",
+    "test": "node --test \"src/**/*.test.ts\"",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json"
+  },
+  "dependencies": {
+    "aedes": "^1.2.0",
+    "express": "^5.3.0",
+    "mqtt": "^5.16.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@types/ws": "^8.18.2",
+    "@vitejs/plugin-react": "^6.1.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.5"
+  }
+}
