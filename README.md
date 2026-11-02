@@ -84,7 +84,7 @@ dashboard draws itself from it:
 
 Then make the same change in the car's `app_program/protocol.h` and in the task
 that handles it, and update the golden sample in `protocol.test.ts` and the
-car's `mqtt_client_test.c` if the telemetry layout changed. `npm test` and the
+car's `app_program/comms/comms_test.c` if the telemetry layout changed. `npm test` and the
 car's `make NET=lwip TEST=1` build both check that sample, so a mismatch shows
 up as a failing test rather than wrong numbers on screen.
 

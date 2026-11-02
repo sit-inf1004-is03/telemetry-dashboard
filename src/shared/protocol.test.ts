@@ -11,7 +11,7 @@ import {
   TELEMETRY_FIELDS,
 } from "./protocol.ts";
 
-// The same sample as test MQ-U05 in the car (app_program/mqtt/mqtt_client_test.c).
+// The same sample as test CO-U05 in the car (app_program/comms/comms_test.c).
 // If this fails, protocol.ts and protocol.h disagree.
 const GOLDEN_TEXT = "8024560276590111274";
 const GOLDEN_FIELDS = {
