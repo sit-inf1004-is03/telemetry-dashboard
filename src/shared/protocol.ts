@@ -42,7 +42,7 @@ export const STATUS_OFFLINE = "offline";
 // Commands (robocar/<id>/cmd) and settings (robocar/<id>/config)
 //
 // Both are sent as decimal integers separated by spaces, the identifier first:
-// "2 60 -20 1500" is CMD_DRIVE at 60 % speed, 20 % left, for 1.5 s.
+// "1" is CMD_START, "1 250" is CFG_TELEMETRY_PERIOD 250 ms.
 // The dashboard draws a form for every entry below, so adding one here is all
 // the dashboard needs; the car needs it in protocol.h and a task that acts on it.
 // ---------------------------------------------------------------------------
@@ -62,8 +62,11 @@ export interface MessageDef {
   args: ArgDef[];
 }
 
-/** Command identifiers: CMD_* in protocol.h */
-export const CMD = { PING: 0, STOP: 1, DRIVE: 2, SET_MODE: 3 } as const;
+/**
+ * Command identifiers: CMD_* in protocol.h. START, STOP and CLEAR are passed
+ * to the car's Navigation as its remote commands (NAV_REMOTE_*).
+ */
+export const CMD = { PING: 0, START: 1, STOP: 2, CLEAR: 3 } as const;
 
 /** Setting identifiers: CFG_* in protocol.h */
 export const CFG = { TELEMETRY_PERIOD: 1, TELEMETRY_ENABLE: 2 } as const;
@@ -71,32 +74,16 @@ export const CFG = { TELEMETRY_PERIOD: 1, TELEMETRY_ENABLE: 2 } as const;
 /** Car limit: at most this many arguments after the identifier. */
 export const MAX_ARGS = 4;
 
-export const MODES = ["idle", "manual", "line", "avoid"] as const;
-
 export const COMMANDS: MessageDef[] = [
   {
     id: CMD.PING,
     name: "Ping",
-    description: 'The car answers "pong <token>" in its log.',
+    description: 'The car answers "remote: pong <token>" in its log.',
     args: [{ name: "token", min: 0, max: 999999, default: 1 }],
   },
-  { id: CMD.STOP, name: "Stop", description: "Both wheels to 0.", args: [] },
-  {
-    id: CMD.DRIVE,
-    name: "Drive",
-    description: "Negative steer turns left. Stops after the time, or never if 0.",
-    args: [
-      { name: "speed", min: -100, max: 100, default: 50, unit: "%" },
-      { name: "steer", min: -100, max: 100, default: 0, unit: "%" },
-      { name: "time", min: 0, max: 600000, default: 1000, unit: "ms" },
-    ],
-  },
-  {
-    id: CMD.SET_MODE,
-    name: "Set mode",
-    description: MODES.map((m, i) => `${i} = ${m}`).join(", "),
-    args: [{ name: "mode", min: 0, max: MODES.length - 1, default: 1 }],
-  },
+  { id: CMD.START, name: "Start", description: "From IDLE or STOPPED: follow the line.", args: [] },
+  { id: CMD.STOP, name: "Stop", description: "Brake and wait.", args: [] },
+  { id: CMD.CLEAR, name: "Clear faults", description: "From FAULT: clear the faults and go back to IDLE.", args: [] },
 ];
 
 export const SETTINGS: MessageDef[] = [
@@ -155,53 +142,82 @@ export interface TelemetryField {
   display?: (raw: number) => string;
   /** plot the history of this field on this fixed scale */
   chart?: { min: number; max: number };
+  /** a flag that is bad news when set (a fault) */
+  alert?: boolean;
+  /** decoded, but not shown as a tile */
+  hidden?: boolean;
 }
+
+/** Bump with TLM_LAYOUT in protocol.h whenever the layout below changes. */
+export const TELEMETRY_LAYOUT = 1;
+
+export const NAV_STATES = ["idle", "line follow", "junction", "obstacle", "bypass", "stopped", "fault"] as const;
+export const NAV_REASONS = ["none", "fault bit", "motion fault", "line not found", "remote stop"] as const;
+export const MOTION_ACTIVITIES = ["idle", "straight", "pivot"] as const;
+export const LINE_STATES = ["on line", "lost", "searching", "not reported"] as const;
+
+/** The team's fault bits (NAV_FLT_* in navigation.h), bits 14-21 of the word. */
+export const FAULTS = [
+  ["faultMotorStall", "Motor stall"],
+  ["faultEncoder", "Encoder"],
+  ["faultLineLost", "Line lost"],
+  ["faultImu", "IMU"],
+  ["faultEstop", "E-stop"],
+  ["faultNoEcho", "No echo"],
+  ["faultScanError", "Scan error"],
+  ["faultWifiLoss", "Wi-Fi loss"],
+] as const;
 
 export const TELEMETRY_FIELDS: TelemetryField[] = [
   { key: "seq", label: "Sample", offset: 0, bits: 8 },
-  { key: "mode", label: "Mode", offset: 8, bits: 3, kind: "enum", names: MODES },
-  { key: "moving", label: "Moving", offset: 11, bits: 1, kind: "flag" },
-  { key: "obstacle", label: "Obstacle", offset: 12, bits: 1, kind: "flag" },
-  { key: "onLine", label: "On line", offset: 13, bits: 1, kind: "flag" },
-  { key: "batteryLow", label: "Battery low", offset: 14, bits: 1, kind: "flag" },
-  { key: "stoppedByTimer", label: "Stopped by timer", offset: 15, bits: 1, kind: "flag" },
+  { key: "navState", label: "Vehicle state", offset: 8, bits: 3, kind: "enum", names: NAV_STATES },
+  { key: "navReason", label: "Stop reason", offset: 11, bits: 3, kind: "enum", names: NAV_REASONS },
+  ...FAULTS.map(([key, label], bit) => ({
+    key,
+    label,
+    offset: 14 + bit,
+    bits: 1,
+    kind: "flag" as const,
+    alert: true,
+  })),
+  { key: "motion", label: "Motion", offset: 22, bits: 2, kind: "enum", names: MOTION_ACTIVITIES },
+  { key: "line", label: "Line", offset: 24, bits: 2, kind: "enum", names: LINE_STATES },
   {
     key: "speedLeft",
     label: "Left wheel",
-    offset: 16,
-    bits: 8,
-    signed: true,
-    unit: "%",
-    chart: { min: -100, max: 100 },
+    offset: 26,
+    bits: 10,
+    unit: "mm/s",
+    chart: { min: 0, max: 800 },
+    display: (raw) => (raw === 1023 ? "≥ 1023 mm/s" : `${raw} mm/s`),
   },
   {
     key: "speedRight",
     label: "Right wheel",
-    offset: 24,
-    bits: 8,
-    signed: true,
-    unit: "%",
-    chart: { min: -100, max: 100 },
+    offset: 36,
+    bits: 10,
+    unit: "mm/s",
+    chart: { min: 0, max: 800 },
+    display: (raw) => (raw === 1023 ? "≥ 1023 mm/s" : `${raw} mm/s`),
   },
-  { key: "heading", label: "Heading", offset: 32, bits: 9, unit: "°", chart: { min: 0, max: 359 } },
   {
-    key: "distance",
-    label: "Obstacle distance",
-    offset: 41,
+    key: "obstacle",
+    label: "Obstacle ahead",
+    offset: 46,
     bits: 9,
     unit: "cm",
     chart: { min: 0, max: 400 },
     display: (raw) => (raw === 511 ? "none" : `${raw} cm`),
   },
-  { key: "battery", label: "Battery", offset: 50, bits: 7, unit: "%", chart: { min: 0, max: 100 } },
   {
     key: "rssi",
     label: "Wi-Fi signal",
-    offset: 57,
+    offset: 55,
     bits: 7,
     unit: "dBm",
     display: (raw) => (raw === 0 ? "unknown" : `-${raw} dBm`),
   },
+  { key: "version", label: "Layout version", offset: 62, bits: 2, hidden: true },
 ];
 
 export type Telemetry = Record<string, number>;
@@ -228,7 +244,7 @@ export function encodeTelemetry(values: Partial<Telemetry>): bigint {
   return word;
 }
 
-/** "8024560276590111274" -> 8024560276590111274n, or null if not a 64-bit unsigned decimal. */
+/** "6601995533221430314" -> 6601995533221430314n, or null if not a 64-bit unsigned decimal. */
 export function parseTelemetryPayload(text: string): bigint | null {
   if (!/^\d{1,20}$/.test(text.trim())) return null;
   const word = BigInt(text.trim());

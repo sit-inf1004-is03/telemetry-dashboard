@@ -6,17 +6,21 @@
  *   npm run simulate -- robocar-02      a car with another id
  *   BROKER=mqtt://192.168.1.10 npm run simulate
  *
- * It mirrors what the firmware does in app_program/motion and
- * app_program/telemetry, in simplified form.
+ * It imitates, roughly, the firmware's Navigation (app_program/navigation):
+ * Start makes it follow the line; now and then it meets an obstacle, stops,
+ * goes around it and finds the line again, and sometimes does not and stops
+ * in FAULT until Clear faults. Stop brakes it. Telemetry is packed exactly
+ * as app_program/telemetry/telemetry.c does.
  */
 import mqtt from "mqtt";
 import {
   BROADCAST_ID,
   CFG,
   CMD,
-  MODES,
+  FAULTS,
   STATUS_OFFLINE,
   STATUS_ONLINE,
+  TELEMETRY_LAYOUT,
   encodeTelemetry,
   parseCommand,
   topics,
@@ -25,19 +29,28 @@ import {
 const carId = process.argv[2] ?? "robocar-sim";
 const brokerUrl = process.env.BROKER ?? "mqtt://localhost:1883";
 
+// Numbers as in the firmware's navigation.h and motion.h
+const STATE = { IDLE: 0, LINE_FOLLOW: 1, JUNCTION: 2, OBSTACLE: 3, BYPASS: 4, STOPPED: 5, FAULT: 6 } as const;
+const REASON = { NONE: 0, FAULT_BIT: 1, MOTION: 2, LINE_NOT_FOUND: 3, REMOTE_STOP: 4 } as const;
+const FAULT = { LINE_LOST: 1 << 2, WIFI_LOSS: 1 << 7 } as const;
+const MOTION = { IDLE: 0, STRAIGHT: 1, PIVOT: 2 } as const;
+const LINE = { ON: 0, LOST: 1, SEARCHING: 2 } as const;
+
 const car = {
+  state: STATE.IDLE as number,
+  reason: REASON.NONE as number,
+  faults: 0,
+  motion: MOTION.IDLE as number,
+  line: LINE.ON as number,
   speedLeft: 0,
   speedRight: 0,
-  mode: 0,
-  stoppedByTimer: false,
-  heading: 0,
-  distance: 150,
-  battery: 100,
+  obstacleCm: 511,
+  stateTicks: 0, // samples spent in the current state
   seq: 0,
   periodMs: 1000,
   enabled: true,
+  wasOnline: false,
 };
-let stopTimer: NodeJS.Timeout | undefined;
 let sampleTimer: NodeJS.Timeout | undefined;
 
 const client = mqtt.connect(brokerUrl, {
@@ -52,6 +65,8 @@ function log(line: string) {
 }
 
 client.on("connect", () => {
+  if (car.wasOnline) car.faults |= FAULT.WIFI_LOSS; // as remote.c does on a reconnect
+  car.wasOnline = true;
   client.subscribe([topics.cmd(carId), topics.cmd(BROADCAST_ID), topics.config(carId)], { qos: 1 });
   client.publish(topics.status(carId), STATUS_ONLINE, { qos: 1, retain: true });
   log(`net: online as ${carId} (simulated)`);
@@ -62,7 +77,7 @@ client.on("error", (err) => console.error(`mqtt: ${err.message}`));
 client.on("message", (topic, payload) => {
   const msg = parseCommand(payload.toString());
   if (!msg) {
-    log(`net: ignored a message on ${topic}: not "<id> [arg ...]"`);
+    log(`remote: ignored a message on ${topic}: not "<id> [arg ...]"`);
     return;
   }
   const from = topic === topics.cmd(BROADCAST_ID) ? " (broadcast)" : "";
@@ -70,42 +85,41 @@ client.on("message", (topic, payload) => {
   else runCommand(msg.id, msg.args, from);
 });
 
-function setMotors(left: number, right: number, byTimer = false) {
-  car.speedLeft = left;
-  car.speedRight = right;
-  car.stoppedByTimer = byTimer;
+function enter(state: number) {
+  car.state = state;
+  car.stateTicks = 0;
 }
 
-const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+function halted() {
+  return car.state === STATE.IDLE || car.state === STATE.STOPPED || car.state === STATE.FAULT;
+}
 
-function runCommand(id: number, [a0 = 0, a1 = 0, a2 = 0]: number[], from: string) {
+/** Navigation's rules for the remote commands (nav_on_remote) */
+function runCommand(id: number, [a0 = 0]: number[], from: string) {
   switch (id) {
     case CMD.PING:
-      return log(`motion: pong ${a0}${from}`);
-    case CMD.STOP:
-      clearTimeout(stopTimer);
-      setMotors(0, 0);
-      return log(`motion: stop${from}`);
-    case CMD.DRIVE: {
-      const speed = clamp(a0, -100, 100);
-      const steer = clamp(a1, -100, 100);
-      const time = clamp(a2, 0, 600000);
-      clearTimeout(stopTimer);
-      setMotors(clamp(speed + steer, -100, 100), clamp(speed - steer, -100, 100));
-      if (time > 0) {
-        stopTimer = setTimeout(() => {
-          setMotors(0, 0, true);
-          log("motion: drive time up, stopped");
-        }, time);
+      return log(`remote: pong ${a0}${from}`);
+    case CMD.START:
+      if (halted() && car.state !== STATE.FAULT) {
+        car.reason = REASON.NONE;
+        enter(STATE.LINE_FOLLOW);
       }
-      return log(`motion: drive speed ${speed} steer ${steer} for ${time} ms${from}`);
-    }
-    case CMD.SET_MODE:
-      if (a0 < 0 || a0 >= MODES.length) return log(`motion: no mode ${a0}`);
-      car.mode = a0;
-      return log(`motion: mode ${a0}${from}`);
+      return log(`remote: START to navigation${from}`);
+    case CMD.STOP:
+      if (!halted()) {
+        car.reason = REASON.REMOTE_STOP;
+        enter(STATE.STOPPED);
+      }
+      return log(`remote: STOP to navigation${from}`);
+    case CMD.CLEAR:
+      if (car.state === STATE.FAULT) {
+        car.faults = 0;
+        car.reason = REASON.NONE;
+        enter(STATE.IDLE);
+      }
+      return log(`remote: CLEAR to navigation${from}`);
     default:
-      return log(`motion: unknown command ${id}`);
+      return log(`remote: unknown command ${id}`);
   }
 }
 
@@ -128,30 +142,74 @@ function restartSampling() {
   sampleTimer = setInterval(sample, car.periodMs);
 }
 
-function sample() {
-  const dt = car.periodMs / 1000;
-  const forward = (car.speedLeft + car.speedRight) / 2;
-  const turn = car.speedLeft - car.speedRight;
-  car.heading = (((car.heading + turn * 0.45 * dt) % 360) + 360) % 360;
-  car.distance -= forward * 0.5 * dt;
-  if (car.distance < 5) car.distance = 80 + Math.random() * 300;
-  car.battery = clamp(car.battery + (forward || turn ? -0.04 : 0.2) * dt, 0, 100);
+const jitter = (n: number) => n + Math.round((Math.random() - 0.5) * n * 0.2);
 
+/** One step of the pretend car, once per sample */
+function step() {
+  const seconds = (car.stateTicks * car.periodMs) / 1000;
+  car.stateTicks++;
+
+  switch (car.state) {
+    case STATE.LINE_FOLLOW:
+      car.motion = MOTION.STRAIGHT;
+      car.line = LINE.ON;
+      car.speedLeft = jitter(300);
+      car.speedRight = jitter(300);
+      if (car.obstacleCm === 511 && Math.random() < 0.08) car.obstacleCm = 150; // something ahead
+      if (car.obstacleCm !== 511) car.obstacleCm -= 25;
+      if (car.obstacleCm !== 511 && car.obstacleCm <= 20) enter(STATE.OBSTACLE);
+      else if (seconds > 4 && Math.random() < 0.05) enter(STATE.JUNCTION);
+      break;
+    case STATE.JUNCTION:
+      car.motion = MOTION.PIVOT;
+      car.speedLeft = 150;
+      car.speedRight = 150;
+      if (seconds >= 1) enter(STATE.LINE_FOLLOW);
+      break;
+    case STATE.OBSTACLE: // braked; Obstacle Scan scans
+      car.motion = MOTION.IDLE;
+      car.speedLeft = car.speedRight = 0;
+      if (seconds >= 2) enter(STATE.BYPASS);
+      break;
+    case STATE.BYPASS:
+      car.motion = seconds < 1 ? MOTION.PIVOT : MOTION.STRAIGHT;
+      car.line = seconds < 1 ? LINE.LOST : LINE.SEARCHING;
+      car.speedLeft = jitter(200);
+      car.speedRight = jitter(200);
+      car.obstacleCm = 511;
+      if (seconds >= 3) {
+        if (Math.random() < 0.25) {
+          car.faults |= FAULT.LINE_LOST;
+          car.reason = REASON.LINE_NOT_FOUND;
+          enter(STATE.FAULT);
+          log("navigation: line not found after the bypass (simulated)");
+        } else {
+          enter(STATE.LINE_FOLLOW);
+        }
+      }
+      break;
+    default: // IDLE, STOPPED, FAULT
+      car.motion = MOTION.IDLE;
+      car.speedLeft = car.speedRight = 0;
+      car.obstacleCm = 511;
+  }
+}
+
+function sample() {
+  step();
   if (!car.enabled || !client.connected) return;
   const word = encodeTelemetry({
     seq: car.seq,
-    mode: car.mode,
-    moving: car.speedLeft || car.speedRight ? 1 : 0,
-    obstacle: car.distance < 20 ? 1 : 0,
-    onLine: Math.floor(car.heading / 30) % 2 === 0 ? 1 : 0,
-    batteryLow: car.battery < 20 ? 1 : 0,
-    stoppedByTimer: car.stoppedByTimer ? 1 : 0,
-    speedLeft: car.speedLeft,
-    speedRight: car.speedRight,
-    heading: car.heading,
-    distance: car.distance >= 400 ? 511 : car.distance,
-    battery: car.battery,
+    navState: car.state,
+    navReason: car.reason,
+    ...Object.fromEntries(FAULTS.map(([key], bit) => [key, (car.faults >> bit) & 1])),
+    motion: car.motion,
+    line: car.line,
+    speedLeft: Math.min(car.speedLeft, 1023),
+    speedRight: Math.min(car.speedRight, 1023),
+    obstacle: car.obstacleCm,
     rssi: 50 + Math.round(Math.random() * 8),
+    version: TELEMETRY_LAYOUT,
   });
   car.seq = (car.seq + 1) & 0xff;
   client.publish(topics.telemetry(carId), word.toString());

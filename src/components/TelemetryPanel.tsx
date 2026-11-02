@@ -1,10 +1,11 @@
 /**
  * The latest telemetry sample: one tile per field in TELEMETRY_FIELDS, with a
  * chart of its recent history where the field asks for one. Flags (1-bit
- * fields) are shown together as a row of on/off badges.
+ * fields) are shown together as a row of on/off badges; flags marked `alert`
+ * (the fault bits) are grouped under "Faults" and stand out when set.
  */
 import { useEffect, useState } from "react";
-import { TELEMETRY_FIELDS, formatField } from "../shared/protocol.ts";
+import { TELEMETRY_FIELDS, TELEMETRY_LAYOUT, formatField, type TelemetryField } from "../shared/protocol.ts";
 import type { Car } from "../useRobocars.ts";
 import { Sparkline } from "./Sparkline.tsx";
 
@@ -20,9 +21,12 @@ export function TelemetryPanel({ car }: { car: Car }) {
     );
   }
 
-  const flags = TELEMETRY_FIELDS.filter((f) => f.kind === "flag");
-  const others = TELEMETRY_FIELDS.filter((f) => f.kind !== "flag");
+  const shown = TELEMETRY_FIELDS.filter((f) => !f.hidden);
+  const faults = shown.filter((f) => f.kind === "flag" && f.alert);
+  const flags = shown.filter((f) => f.kind === "flag" && !f.alert);
+  const others = shown.filter((f) => f.kind !== "flag");
   const age = Math.max(0, (now - t.time.getTime()) / 1000);
+  const version = t.values.version;
 
   return (
     <section className="panel">
@@ -33,14 +37,16 @@ export function TelemetryPanel({ car }: { car: Car }) {
         <code title="the same, in hex">0x{t.word.toString(16).padStart(16, "0")}</code>
       </p>
 
-      <div className="flags">
-        {flags.map((f) => (
-          <span key={f.key} className={`flag ${t.values[f.key] ? "on" : ""}`}>
-            {t.values[f.key] ? "● " : "○ "}
-            {f.label}
-          </span>
-        ))}
-      </div>
+      {version !== undefined && version !== TELEMETRY_LAYOUT && (
+        <p className="warning" role="alert">
+          The car sends telemetry layout {version}, but this dashboard reads layout {TELEMETRY_LAYOUT}. The values below
+          are probably wrong: update the dashboard or the firmware so <code>protocol.ts</code> and{" "}
+          <code>protocol.h</code> match.
+        </p>
+      )}
+
+      {faults.length > 0 && <FlagRow title="Faults" fields={faults} values={t.values} />}
+      {flags.length > 0 && <FlagRow fields={flags} values={t.values} />}
 
       <div className="tiles">
         {others.map((f) => (
@@ -60,6 +66,28 @@ export function TelemetryPanel({ car }: { car: Car }) {
         ))}
       </div>
     </section>
+  );
+}
+
+function FlagRow({
+  title,
+  fields,
+  values,
+}: {
+  title?: string;
+  fields: TelemetryField[];
+  values: Record<string, number>;
+}) {
+  return (
+    <div className="flags">
+      {title && <span className="flags-title">{title}</span>}
+      {fields.map((f) => (
+        <span key={f.key} className={`flag ${values[f.key] ? "on" : ""} ${f.alert ? "alert" : ""}`}>
+          {values[f.key] ? "● " : "○ "}
+          {f.label}
+        </span>
+      ))}
+    </div>
   );
 }
 

@@ -72,6 +72,16 @@ files, [MQTT.js](https://github.com/mqttjs/MQTT.js) for the clients,
 it. There is no router, state library or CSS framework: state is one reducer
 in `useRobocars.ts`, and components are plain functions of it.
 
+## What the car sends and accepts
+
+The firmware's telemetry (layout version 1) reports what the team's
+subsystems publish: Navigation's vehicle state, stop reason and fault bits,
+Motion's activity, the line state, both wheel speeds in mm/s, the nearest
+obstacle in cm and the Wi-Fi signal. Commands are Ping, and Start, Stop and
+Clear faults, which the car passes to its Navigation. The full bit layout is
+in the firmware's `MQTT.md`. If the car sends a layout version the dashboard
+does not know, the telemetry panel says so instead of showing wrong numbers.
+
 ## Changing what the car sends or accepts
 
 Everything about the protocol is in `src/shared/protocol.ts`, and the
@@ -99,4 +109,4 @@ to the `subscribe` call in `useRobocars.ts` and handle its leaf in `reducer()`.
 - The broker keeps nothing on disk. Retained `status` messages last until it
   restarts; the dashboard shows history only from when the page was opened.
 - Commands are published with QoS 1 and never retained, so a car that
-  reconnects does not replay an old drive command.
+  reconnects does not replay an old Start.

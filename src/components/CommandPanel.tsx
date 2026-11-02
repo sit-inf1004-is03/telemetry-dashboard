@@ -56,7 +56,7 @@ export function CommandPanel({ carId, disabled, send }: Props) {
         <input
           className="grow"
           value={raw}
-          placeholder="e.g. 2 60 -20 1500"
+          placeholder="e.g. 0 42  (ping with token 42)"
           aria-label="Raw payload"
           onChange={(e) => setRaw(e.target.value)}
         />
