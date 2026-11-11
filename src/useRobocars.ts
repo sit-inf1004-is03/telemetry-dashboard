@@ -2,7 +2,7 @@
  * The dashboard's MQTT client and everything it has heard, as React state.
  *
  * The browser connects to the broker over WebSocket (ws://<host>/mqtt, see
- * server/main.ts), subscribes to every car's status, telemetry and log, and
+ * server/main.ts), subscribes to every car's status, telemetry, events and log, and
  * keeps one Car record per car id it sees. Components only read that state
  * and call send(); nothing else in the dashboard touches MQTT.
  */
@@ -12,15 +12,17 @@ import {
   BROADCAST_ID,
   STATUS_ONLINE,
   decodeTelemetry,
+  parseEvent,
   parseTelemetryPayload,
   parseTopic,
   topics,
+  type CarEvent,
   type Telemetry,
 } from "./shared/protocol.ts";
 
 /** Samples kept per car for the charts */
 export const HISTORY_LENGTH = 120;
-/** Log lines kept per car */
+/** Log lines, and detections, kept per car */
 const LOG_LENGTH = 500;
 
 export type Connection = "connecting" | "connected" | "disconnected";
@@ -32,26 +34,40 @@ export interface LogLine {
   kind: "car" | "sent";
 }
 
+/** A hump or barcode the car reported (robocar/<id>/event) */
+export type Detection = CarEvent & { time: Date };
+export type HumpDetection = Extract<Detection, { type: "hump" }>;
+
 export interface Car {
   id: string;
   online: boolean;
   /** latest sample */
-  telemetry?: { word: bigint; values: Telemetry; time: Date };
+  telemetry?: { words: bigint[]; values: Telemetry; time: Date };
   /** oldest first, at most HISTORY_LENGTH */
   history: Telemetry[];
   /** samples missing from the sequence numbers since the dashboard opened */
   lostSamples: number;
   logs: LogLine[];
+  /** humps and barcodes, oldest first, at most LOG_LENGTH */
+  detections: Detection[];
+  /** the highest hump since the page opened or the last resetTallest() */
+  tallestHump?: HumpDetection;
 }
 
 type Cars = Record<string, Car>;
 
 type Action =
   | { type: "message"; topic: string; text: string; time: Date }
-  | { type: "sent"; carId: string; text: string; time: Date };
+  | { type: "sent"; carId: string; text: string; time: Date }
+  | { type: "resetTallest"; carId: string };
 
 function emptyCar(id: string): Car {
-  return { id, online: false, history: [], lostSamples: 0, logs: [] };
+  return { id, online: false, history: [], lostSamples: 0, logs: [], detections: [] };
+}
+
+/** Is hump a higher than hump b? A hump over the 127 mm limit beats one at exactly 127. */
+function higher(a: HumpDetection, b?: HumpDetection) {
+  return !b || a.heightMm > b.heightMm || (a.heightMm === b.heightMm && a.over && !b.over);
 }
 
 function keepLast<T>(list: T[], item: T, max: number): T[] {
@@ -59,6 +75,11 @@ function keepLast<T>(list: T[], item: T, max: number): T[] {
 }
 
 function reducer(cars: Cars, action: Action): Cars {
+  if (action.type === "resetTallest") {
+    const car = cars[action.carId];
+    return car ? { ...cars, [car.id]: { ...car, tallestHump: undefined } } : cars;
+  }
+
   if (action.type === "sent") {
     // A broadcast goes in the log of every car we know of
     const ids = action.carId === BROADCAST_ID ? Object.keys(cars) : [action.carId];
@@ -90,10 +111,25 @@ function reducer(cars: Cars, action: Action): Cars {
         },
       };
 
+    case "event": {
+      const event = parseEvent(action.text);
+      if (!event) return cars;
+      const detection: Detection = { ...event, time: action.time };
+      return {
+        ...cars,
+        [car.id]: {
+          ...car,
+          detections: keepLast(car.detections, detection, LOG_LENGTH),
+          tallestHump:
+            detection.type === "hump" && higher(detection, car.tallestHump) ? detection : car.tallestHump,
+        },
+      };
+    }
+
     case "telemetry": {
-      const word = parseTelemetryPayload(action.text);
-      if (word === null) return cars;
-      const values = decodeTelemetry(word);
+      const words = parseTelemetryPayload(action.text);
+      if (words === null) return cars;
+      const values = decodeTelemetry(words);
       const previous = car.telemetry?.values.seq;
       const gap = previous === undefined ? 0 : (values.seq - previous - 1 + 256) % 256;
       return {
@@ -101,7 +137,7 @@ function reducer(cars: Cars, action: Action): Cars {
         [car.id]: {
           ...car,
           online: true, // a car that sends is online, even if its status message was missed
-          telemetry: { word, values, time: action.time },
+          telemetry: { words, values, time: action.time },
           history: keepLast(car.history, values, HISTORY_LENGTH),
           lostSamples: car.lostSamples + gap,
         },
@@ -126,7 +162,7 @@ export function useRobocars() {
 
     client.on("connect", () => {
       setConnection("connected");
-      client.subscribe(["robocar/+/status", "robocar/+/telemetry", "robocar/+/log"]);
+      client.subscribe(["robocar/+/status", "robocar/+/telemetry", "robocar/+/event", "robocar/+/log"]);
     });
     client.on("reconnect", () => setConnection("connecting"));
     client.on("close", () => setConnection("disconnected"));
@@ -149,5 +185,8 @@ export function useRobocars() {
     dispatch({ type: "sent", carId, text: `sent ${leaf} "${text}" to ${target}`, time: new Date() });
   }, []);
 
-  return { connection, cars, send };
+  /** Forget a car's tallest hump, e.g. before a new run. */
+  const resetTallest = useCallback((carId: string) => dispatch({ type: "resetTallest", carId }), []);
+
+  return { connection, cars, send, resetTallest };
 }

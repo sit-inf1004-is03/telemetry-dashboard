@@ -18,8 +18,10 @@ export const BROADCAST_ID = "all";
 export const topics = {
   /** car -> dashboard: "online" / "offline" (retained; "offline" is the last will) */
   status: (carId: string) => `robocar/${carId}/status`,
-  /** car -> dashboard: one unsigned 64-bit integer in decimal, packed as TELEMETRY_FIELDS */
+  /** car -> dashboard: unsigned 64-bit integers in decimal, one space apart, packed as TELEMETRY_FIELDS */
   telemetry: (carId: string) => `robocar/${carId}/telemetry`,
+  /** car -> dashboard: "<event id> [arg ...]", sent once when something happens */
+  event: (carId: string) => `robocar/${carId}/event`,
   /** car -> dashboard: one line of text */
   log: (carId: string) => `robocar/${carId}/log`,
   /** dashboard -> car: "<command id> [arg ...]"; carId "all" reaches every car */
@@ -122,14 +124,45 @@ export function parseCommand(text: string): { id: number; args: number[] } | nul
 }
 
 // ---------------------------------------------------------------------------
-// Telemetry: one 64-bit word, fields packed from bit 0 upwards.
-// Mirrors the TLM_* lines in protocol.h. The dashboard shows every field
-// listed here, so a new field only needs adding here (and in the car).
+// Events (robocar/<id>/event): EVT_* in protocol.h. Same format as a command.
+// ---------------------------------------------------------------------------
+
+export const EVT = { HUMP: 0, BARCODE: 1 } as const;
+
+/** What a barcode letter tells Navigation to do (barcode.c, letter_to_cmd) */
+export const BARCODE_COMMANDS: Record<string, string> = { A: "left", B: "right", C: "straight", D: "U-turn" };
+
+export type CarEvent =
+  /** heightMm is 127 with `over` set when the hump was higher than 127 mm */
+  | { type: "hump"; heightMm: number; over: boolean; tiltDeg: number }
+  | { type: "barcode"; letter: string };
+
+/** "0 42 0 9" -> a 42 mm hump, "1 65" -> barcode A, or null for anything else. */
+export function parseEvent(text: string): CarEvent | null {
+  const msg = parseCommand(text);
+  if (!msg) return null;
+  const [a = 0, b = 0, c = 0] = msg.args;
+  if (msg.id === EVT.HUMP && a >= 0 && a <= 127) return { type: "hump", heightMm: a, over: b !== 0, tiltDeg: c };
+  if (msg.id === EVT.BARCODE && a > 32 && a < 127) return { type: "barcode", letter: String.fromCharCode(a) };
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Telemetry: 64-bit words, fields packed from bit 0 upwards, sent in decimal
+// one space apart. Mirrors the TLM_* and TLM_W1_* lines in protocol.h. The
+// dashboard shows every field listed here, so a new field only needs adding
+// here (and in the car).
+//
+// Word 0 is laid out as in layout 1 (only its version reads 2); layout 2
+// added word 1 when word 0 was full. A layout 1 car sends word 0 alone, and
+// its word 1 fields are then simply missing.
 // ---------------------------------------------------------------------------
 
 export interface TelemetryField {
   key: string;
   label: string;
+  /** which word of the payload the field is in (default 0) */
+  word?: number;
   offset: number;
   bits: number;
   /** two's complement within its width */
@@ -146,15 +179,23 @@ export interface TelemetryField {
   alert?: boolean;
   /** decoded, but not shown as a tile */
   hidden?: boolean;
+  /** only meaningful while this flag field is 1 (shown as "no data" otherwise) */
+  requires?: string;
 }
 
 /** Bump with TLM_LAYOUT in protocol.h whenever the layout below changes. */
-export const TELEMETRY_LAYOUT = 1;
+export const TELEMETRY_LAYOUT = 2;
+/** Words in a layout 2 payload: TLM_WORDS */
+export const TELEMETRY_WORDS = 2;
+/** Layouts this dashboard reads: layout 1 is word 0 of layout 2 */
+export const READABLE_LAYOUTS = [1, 2];
 
 export const NAV_STATES = ["idle", "line follow", "junction", "obstacle", "bypass", "stopped", "fault"] as const;
 export const NAV_REASONS = ["none", "fault bit", "motion fault", "line not found", "remote stop"] as const;
 export const MOTION_ACTIVITIES = ["idle", "straight", "pivot"] as const;
 export const LINE_STATES = ["on line", "lost", "searching", "not reported"] as const;
+export const IMU_MOTIONS = ["stationary", "accelerating", "cruising", "turning"] as const;
+export const IMU_TERRAINS = ["level", "climbing", "descending", "hump ended"] as const;
 
 /** The team's fault bits (NAV_FLT_* in navigation.h), bits 14-21 of the word. */
 export const FAULTS = [
@@ -218,14 +259,35 @@ export const TELEMETRY_FIELDS: TelemetryField[] = [
     display: (raw) => (raw === 0 ? "unknown" : `-${raw} dBm`),
   },
   { key: "version", label: "Layout version", offset: 62, bits: 2, hidden: true },
+
+  // Word 1 (layout 2)
+  { key: "imuMotion", label: "IMU motion", word: 1, offset: 0, bits: 2, kind: "enum", names: IMU_MOTIONS, requires: "imuOk" },
+  { key: "imuTerrain", label: "IMU terrain", word: 1, offset: 2, bits: 2, kind: "enum", names: IMU_TERRAINS, requires: "imuOk" },
+  { key: "imuOk", label: "IMU data", word: 1, offset: 4, bits: 1, kind: "flag" },
+  { key: "barcode", label: "Last barcode", word: 1, offset: 5, bits: 7, hidden: true },
+  { key: "barcodeCount", label: "Barcodes read", word: 1, offset: 12, bits: 4, hidden: true },
+  {
+    key: "distance",
+    label: "Distance travelled",
+    word: 1,
+    offset: 16,
+    bits: 20,
+    unit: "cm",
+    display: (raw) => `${raw === 1048575 ? "≥ " : ""}${(raw / 100).toFixed(2)} m`,
+  },
 ];
 
 export type Telemetry = Record<string, number>;
 
-/** Unpacks every field of a telemetry word. Signed fields come out negative where they should. */
-export function decodeTelemetry(word: bigint): Telemetry {
+/**
+ * Unpacks every field of the telemetry words. Fields of a word that was not
+ * sent are left out. Signed fields come out negative where they should.
+ */
+export function decodeTelemetry(words: bigint[]): Telemetry {
   const values: Telemetry = {};
   for (const f of TELEMETRY_FIELDS) {
+    const word = words[f.word ?? 0];
+    if (word === undefined) continue;
     let v = Number((word >> BigInt(f.offset)) & ((1n << BigInt(f.bits)) - 1n));
     if (f.signed && v >= 2 ** (f.bits - 1)) v -= 2 ** f.bits;
     values[f.key] = v;
@@ -233,22 +295,31 @@ export function decodeTelemetry(word: bigint): Telemetry {
   return values;
 }
 
-/** Packs fields into a telemetry word (the car does this in C; the simulator and tests use this). */
-export function encodeTelemetry(values: Partial<Telemetry>): bigint {
-  let word = 0n;
+/** Packs fields into telemetry words (the car does this in C; the simulator and tests use this). */
+export function encodeTelemetry(values: Partial<Telemetry>): bigint[] {
+  const words = Array.from({ length: TELEMETRY_WORDS }, () => 0n);
   for (const f of TELEMETRY_FIELDS) {
     const v = BigInt(Math.trunc(values[f.key] ?? 0));
     const mask = (1n << BigInt(f.bits)) - 1n;
-    word |= (BigInt.asUintN(64, v) & mask) << BigInt(f.offset);
+    words[f.word ?? 0] |= (BigInt.asUintN(64, v) & mask) << BigInt(f.offset);
   }
-  return word;
+  return words;
 }
 
-/** "6601995533221430314" -> 6601995533221430314n, or null if not a 64-bit unsigned decimal. */
-export function parseTelemetryPayload(text: string): bigint | null {
-  if (!/^\d{1,20}$/.test(text.trim())) return null;
-  const word = BigInt(text.trim());
-  return word < 1n << 64n ? word : null;
+/** [1n, 2n] -> "1 2", the payload the car sends */
+export function formatTelemetryPayload(words: bigint[]): string {
+  return words.map(String).join(" ");
+}
+
+/**
+ * "11213681551648818218 8090835030" -> [11213681551648818218n, 8090835030n]:
+ * one to TELEMETRY_WORDS 64-bit unsigned decimals, or null for anything else.
+ */
+export function parseTelemetryPayload(text: string): bigint[] | null {
+  const parts = text.trim().split(/\s+/);
+  if (parts.length > TELEMETRY_WORDS || !parts.every((p) => /^\d{1,20}$/.test(p))) return null;
+  const words = parts.map(BigInt);
+  return words.every((w) => w < 1n << 64n) ? words : null;
 }
 
 /** How a field's value is shown to a person. */

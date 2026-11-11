@@ -5,7 +5,13 @@
  * (the fault bits) are grouped under "Faults" and stand out when set.
  */
 import { useEffect, useState } from "react";
-import { TELEMETRY_FIELDS, TELEMETRY_LAYOUT, formatField, type TelemetryField } from "../shared/protocol.ts";
+import {
+  READABLE_LAYOUTS,
+  TELEMETRY_FIELDS,
+  TELEMETRY_LAYOUT,
+  formatField,
+  type TelemetryField,
+} from "../shared/protocol.ts";
 import type { Car } from "../useRobocars.ts";
 import { Sparkline } from "./Sparkline.tsx";
 
@@ -21,7 +27,8 @@ export function TelemetryPanel({ car }: { car: Car }) {
     );
   }
 
-  const shown = TELEMETRY_FIELDS.filter((f) => !f.hidden);
+  // Fields of a word the car did not send (a layout 1 car has no word 1) are left out
+  const shown = TELEMETRY_FIELDS.filter((f) => !f.hidden && t.values[f.key] !== undefined);
   const faults = shown.filter((f) => f.kind === "flag" && f.alert);
   const flags = shown.filter((f) => f.kind === "flag" && !f.alert);
   const others = shown.filter((f) => f.kind !== "flag");
@@ -33,11 +40,11 @@ export function TelemetryPanel({ car }: { car: Car }) {
       <h3>Telemetry</h3>
       <p className="muted small">
         Last sample {age.toFixed(0)} s ago · {car.lostSamples} lost since this page opened · raw{" "}
-        <code title="as received">{t.word.toString()}</code> ={" "}
-        <code title="the same, in hex">0x{t.word.toString(16).padStart(16, "0")}</code>
+        <code title="as received">{t.words.join(" ")}</code> ={" "}
+        <code title="the same, in hex">{t.words.map((w) => `0x${w.toString(16).padStart(16, "0")}`).join(" ")}</code>
       </p>
 
-      {version !== undefined && version !== TELEMETRY_LAYOUT && (
+      {version !== undefined && !READABLE_LAYOUTS.includes(version) && (
         <p className="warning" role="alert">
           The car sends telemetry layout {version}, but this dashboard reads layout {TELEMETRY_LAYOUT}. The values below
           are probably wrong: update the dashboard or the firmware so <code>protocol.ts</code> and{" "}
@@ -52,7 +59,9 @@ export function TelemetryPanel({ car }: { car: Car }) {
         {others.map((f) => (
           <div key={f.key} className="tile">
             <div className="tile-label">{f.label}</div>
-            <div className="tile-value">{formatField(f, t.values[f.key])}</div>
+            <div className="tile-value">
+              {f.requires && !t.values[f.requires] ? <span className="muted">no data</span> : formatField(f, t.values[f.key])}
+            </div>
             {f.chart && (
               <Sparkline
                 label={f.label}

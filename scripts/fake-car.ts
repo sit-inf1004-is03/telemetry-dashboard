@@ -9,19 +9,24 @@
  * It imitates, roughly, the firmware's Navigation (app_program/navigation):
  * Start makes it follow the line; now and then it meets an obstacle, stops,
  * goes around it and finds the line again, and sometimes does not and stops
- * in FAULT until Clear faults. Stop brakes it. Telemetry is packed exactly
- * as app_program/telemetry/telemetry.c does.
+ * in FAULT until Clear faults. Stop brakes it. On the way it rides over
+ * humps and reads barcodes (A-D, each followed by a junction), and reports
+ * them as events. Telemetry is packed exactly as
+ * app_program/telemetry/telemetry.c does.
  */
 import mqtt from "mqtt";
 import {
   BROADCAST_ID,
   CFG,
   CMD,
+  EVT,
   FAULTS,
   STATUS_OFFLINE,
   STATUS_ONLINE,
   TELEMETRY_LAYOUT,
   encodeTelemetry,
+  formatCommand,
+  formatTelemetryPayload,
   parseCommand,
   topics,
 } from "../src/shared/protocol.ts";
@@ -35,6 +40,9 @@ const REASON = { NONE: 0, FAULT_BIT: 1, MOTION: 2, LINE_NOT_FOUND: 3, REMOTE_STO
 const FAULT = { LINE_LOST: 1 << 2, WIFI_LOSS: 1 << 7 } as const;
 const MOTION = { IDLE: 0, STRAIGHT: 1, PIVOT: 2 } as const;
 const LINE = { ON: 0, LOST: 1, SEARCHING: 2 } as const;
+// imu_pack.h
+const IMU_MOTION = { STATIONARY: 0, ACCELERATING: 1, CRUISING: 2, TURNING: 3 } as const;
+const TERRAIN = { LEVEL: 0, CLIMBING: 1, DESCENDING: 2, HUMP_CLOSED: 3 } as const;
 
 const car = {
   state: STATE.IDLE as number,
@@ -45,6 +53,12 @@ const car = {
   speedLeft: 0,
   speedRight: 0,
   obstacleCm: 511,
+  imuMotion: IMU_MOTION.STATIONARY as number,
+  terrain: TERRAIN.LEVEL as number,
+  humpMm: 0, // height of the hump being climbed
+  distanceCm: 0,
+  barcode: 0, // ASCII code of the last letter read
+  barcodeCount: 0,
   stateTicks: 0, // samples spent in the current state
   seq: 0,
   periodMs: 1000,
@@ -84,6 +98,42 @@ client.on("message", (topic, payload) => {
   if (topic === topics.config(carId)) applySetting(msg.id, msg.args);
   else runCommand(msg.id, msg.args, from);
 });
+
+function sendEvent(id: number, args: number[]) {
+  client.publish(topics.event(carId), formatCommand(id, args));
+}
+
+/** Line Following reads a barcode A-D; Navigation turns at the junction after it */
+function readBarcode() {
+  const letter = "ABCD"[Math.floor(Math.random() * 4)];
+  car.barcode = letter.charCodeAt(0);
+  car.barcodeCount = (car.barcodeCount + 1) & 0xf;
+  log(`[BC] read *${letter}* (simulated)`);
+  sendEvent(EVT.BARCODE, [car.barcode]);
+}
+
+/** The IMU's terrain region: level -> climbing -> descending -> hump closed -> level */
+function stepTerrain() {
+  switch (car.terrain) {
+    case TERRAIN.LEVEL:
+      if (car.state === STATE.LINE_FOLLOW && Math.random() < 0.06) {
+        car.terrain = TERRAIN.CLIMBING;
+        car.humpMm = 15 + Math.round(Math.random() * 60);
+      }
+      break;
+    case TERRAIN.CLIMBING:
+      car.terrain = TERRAIN.DESCENDING;
+      break;
+    case TERRAIN.DESCENDING: {
+      car.terrain = TERRAIN.HUMP_CLOSED;
+      const tiltDeg = Math.min(31, Math.round(car.humpMm / 4));
+      sendEvent(EVT.HUMP, [car.humpMm, 0, tiltDeg]);
+      break;
+    }
+    default: // HUMP_CLOSED shows for one sample
+      car.terrain = TERRAIN.LEVEL;
+  }
+}
 
 function enter(state: number) {
   car.state = state;
@@ -158,7 +208,10 @@ function step() {
       if (car.obstacleCm === 511 && Math.random() < 0.08) car.obstacleCm = 150; // something ahead
       if (car.obstacleCm !== 511) car.obstacleCm -= 25;
       if (car.obstacleCm !== 511 && car.obstacleCm <= 20) enter(STATE.OBSTACLE);
-      else if (seconds > 4 && Math.random() < 0.05) enter(STATE.JUNCTION);
+      else if (seconds > 4 && Math.random() < 0.05) {
+        readBarcode();
+        enter(STATE.JUNCTION);
+      }
       break;
     case STATE.JUNCTION:
       car.motion = MOTION.PIVOT;
@@ -193,12 +246,19 @@ function step() {
       car.speedLeft = car.speedRight = 0;
       car.obstacleCm = 511;
   }
+
+  const meanMmPerS = (car.speedLeft + car.speedRight) / 2;
+  car.distanceCm += (meanMmPerS * car.periodMs) / 1000 / 10;
+  if (meanMmPerS === 0) car.imuMotion = IMU_MOTION.STATIONARY;
+  else if (car.motion === MOTION.PIVOT) car.imuMotion = IMU_MOTION.TURNING;
+  else car.imuMotion = car.stateTicks <= 1 ? IMU_MOTION.ACCELERATING : IMU_MOTION.CRUISING;
+  stepTerrain();
 }
 
 function sample() {
   step();
   if (!car.enabled || !client.connected) return;
-  const word = encodeTelemetry({
+  const words = encodeTelemetry({
     seq: car.seq,
     navState: car.state,
     navReason: car.reason,
@@ -210,9 +270,15 @@ function sample() {
     obstacle: car.obstacleCm,
     rssi: 50 + Math.round(Math.random() * 8),
     version: TELEMETRY_LAYOUT,
+    imuMotion: car.imuMotion,
+    imuTerrain: car.terrain,
+    imuOk: 1,
+    barcode: car.barcode,
+    barcodeCount: car.barcodeCount,
+    distance: Math.min(Math.floor(car.distanceCm), 1048575),
   });
   car.seq = (car.seq + 1) & 0xff;
-  client.publish(topics.telemetry(carId), word.toString());
+  client.publish(topics.telemetry(carId), formatTelemetryPayload(words));
 }
 
 process.on("SIGINT", () => {
