@@ -2,11 +2,12 @@ import { useState } from "react";
 import { useRobocars } from "./useRobocars.ts";
 import { BROADCAST_ID, CMD, formatCommand } from "./shared/protocol.ts";
 import { TelemetryPanel } from "./components/TelemetryPanel.tsx";
+import { DetectionsPanel } from "./components/DetectionsPanel.tsx";
 import { CommandPanel } from "./components/CommandPanel.tsx";
 import { LogPanel } from "./components/LogPanel.tsx";
 
 export function App() {
-  const { connection, cars, send } = useRobocars();
+  const { connection, cars, send, resetTallest } = useRobocars();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   const carList = Object.values(cars).sort((a, b) => a.id.localeCompare(b.id));
@@ -52,6 +53,7 @@ export function App() {
               </span>
             </h2>
             <TelemetryPanel car={selected} />
+            <DetectionsPanel car={selected} resetTallest={resetTallest} />
             <div className="columns">
               <CommandPanel carId={selected.id} disabled={connection !== "connected"} send={send} />
               <LogPanel logs={selected.logs} />

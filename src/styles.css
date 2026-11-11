@@ -326,3 +326,41 @@ input[type="number"] {
 .log-line.sent {
   color: var(--series);
 }
+
+/* Detections: humps and barcodes */
+.tile-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 4px;
+}
+button.link {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--series);
+  font-size: 12px;
+}
+button.link:hover {
+  text-decoration: underline;
+}
+.log.detections {
+  height: 200px;
+  margin-top: 12px;
+}
+.badge {
+  display: inline-block;
+  min-width: 7ch;
+  text-align: center;
+  font-size: 11px;
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 0 6px;
+}
+.badge.hump {
+  color: var(--series);
+}
+.badge.barcode {
+  color: var(--text-secondary);
+}

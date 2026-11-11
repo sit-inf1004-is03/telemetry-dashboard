@@ -61,7 +61,7 @@ src/
   shared/protocol.ts topics, commands, telemetry bit layout (copy of the car's protocol.h)
   useRobocars.ts     the dashboard's MQTT connection and state: everything heard, per car
   App.tsx            page layout: car list, then the selected car
-  components/        TelemetryPanel, Sparkline, CommandPanel, LogPanel
+  components/        TelemetryPanel, Sparkline, DetectionsPanel, CommandPanel, LogPanel
   styles.css         all styling; colours for light and dark mode are at the top
 ```
 
@@ -74,21 +74,33 @@ in `useRobocars.ts`, and components are plain functions of it.
 
 ## What the car sends and accepts
 
-The firmware's telemetry (layout version 1) reports what the team's
-subsystems publish: Navigation's vehicle state, stop reason and fault bits,
-Motion's activity, the line state, both wheel speeds in mm/s, the nearest
-obstacle in cm and the Wi-Fi signal. Commands are Ping, and Start, Stop and
-Clear faults, which the car passes to its Navigation. The full bit layout is
-in the firmware's `MQTT.md`. If the car sends a layout version the dashboard
-does not know, the telemetry panel says so instead of showing wrong numbers.
+The firmware's telemetry (layout version 2, two 64-bit words) reports what
+the team's subsystems publish: Navigation's vehicle state, stop reason and
+fault bits, Motion's activity, the line state, both wheel speeds in mm/s, the
+nearest obstacle in cm and the Wi-Fi signal (word 0, as in layout 1), then
+the IMU's motion (stationary, accelerating, cruising, turning) and terrain
+(level, climbing, descending), the last barcode and the distance travelled
+(word 1). A layout 1 car still shows, without the word 1 tiles.
+
+Humps and barcodes also come as events on `robocar/<id>/event`, once each.
+The Detections panel lists them in order, shows the latest barcode (from the
+telemetry too, so it survives a missed event) and keeps the tallest hump
+since the page opened; Reset forgets it, e.g. before a new run.
+
+Commands are Ping, and Start, Stop and Clear faults, which the car passes to
+its Navigation. The full bit layout is in the firmware's `MQTT.md`. If the car
+sends a layout version the dashboard does not know, the telemetry panel says
+so instead of showing wrong numbers.
 
 ## Changing what the car sends or accepts
 
 Everything about the protocol is in `src/shared/protocol.ts`, and the
 dashboard draws itself from it:
 
-- **New telemetry field:** add an entry to `TELEMETRY_FIELDS` (offset, bits,
-  label, unit; `chart: { min, max }` for a history chart). A tile appears.
+- **New telemetry field:** add an entry to `TELEMETRY_FIELDS` (word, offset,
+  bits, label, unit; `chart: { min, max }` for a history chart). A tile appears.
+- **New event:** add its number to `EVT` and a case to `parseEvent()`, then
+  show it in `DetectionsPanel`.
 - **New command or setting:** add an entry to `COMMANDS` or `SETTINGS`. A form
   row with one input per argument appears.
 

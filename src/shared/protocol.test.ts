@@ -6,17 +6,20 @@ import {
   decodeTelemetry,
   encodeTelemetry,
   formatCommand,
+  formatTelemetryPayload,
   parseCommand,
+  parseEvent,
   parseTelemetryPayload,
   parseTopic,
   TELEMETRY_FIELDS,
   TELEMETRY_LAYOUT,
+  TELEMETRY_WORDS,
 } from "./protocol.ts";
 
-// The same sample as test CO-U05 in the car (app_program/comms/comms_test.c).
-// If this fails, protocol.ts and protocol.h disagree.
-const GOLDEN_TEXT = "6601995533221430314";
-const GOLDEN_FIELDS = {
+// The same sample as tests CO-U05 and CO-U10 in the car
+// (app_program/comms/comms_test.c). If this fails, protocol.ts and protocol.h disagree.
+const GOLDEN_TEXT = "11213681551648818218 8090835030";
+const GOLDEN_WORD0_FIELDS = {
   seq: 42,
   navState: 4, // bypass
   navReason: 0,
@@ -34,42 +37,72 @@ const GOLDEN_FIELDS = {
   speedRight: 1023,
   obstacle: 123,
   rssi: 55,
-  version: 1,
+  version: 2,
+};
+const GOLDEN_FIELDS = {
+  ...GOLDEN_WORD0_FIELDS,
+  imuMotion: 2, // cruising
+  imuTerrain: 1, // climbing
+  imuOk: 1,
+  barcode: 66, // "B"
+  barcodeCount: 5,
+  distance: 123456, // cm
 };
 
 test("decodes the car's golden telemetry sample", () => {
-  const word = parseTelemetryPayload(GOLDEN_TEXT);
-  assert.notEqual(word, null);
-  assert.deepEqual(decodeTelemetry(word!), GOLDEN_FIELDS);
+  const words = parseTelemetryPayload(GOLDEN_TEXT);
+  assert.notEqual(words, null);
+  assert.deepEqual(decodeTelemetry(words!), GOLDEN_FIELDS);
 });
 
 test("encodes the golden sample exactly as the car does", () => {
-  assert.equal(encodeTelemetry(GOLDEN_FIELDS).toString(), GOLDEN_TEXT);
+  assert.equal(formatTelemetryPayload(encodeTelemetry(GOLDEN_FIELDS)), GOLDEN_TEXT);
 });
 
 test("the layout version matches the car's TLM_LAYOUT", () => {
   assert.equal(GOLDEN_FIELDS.version, TELEMETRY_LAYOUT);
 });
 
+test("a layout 1 payload (word 0 alone) still decodes, without the word 1 fields", () => {
+  const layout1 = 6601995533221430314n; // the layout 1 golden sample
+  assert.deepEqual(decodeTelemetry(parseTelemetryPayload(layout1.toString())!), { ...GOLDEN_WORD0_FIELDS, version: 1 });
+});
+
 test("remote commands keep Navigation's NAV_REMOTE_* numbers", () => {
   assert.deepEqual([CMD.START, CMD.STOP, CMD.CLEAR], [1, 2, 3]);
 });
 
-test("telemetry fields fit in 64 bits without overlapping", () => {
-  let used = 0n;
+test("telemetry fields fit in their 64-bit words without overlapping", () => {
+  const used = Array.from({ length: TELEMETRY_WORDS }, () => 0n);
   for (const f of TELEMETRY_FIELDS) {
+    const w = f.word ?? 0;
+    assert.ok(w < TELEMETRY_WORDS && f.offset + f.bits <= 64, `${f.key} is outside the words`);
     const mask = ((1n << BigInt(f.bits)) - 1n) << BigInt(f.offset);
-    assert.equal(used & mask, 0n, `${f.key} overlaps another field`);
-    used |= mask;
+    assert.equal(used[w] & mask, 0n, `${f.key} overlaps another field`);
+    used[w] |= mask;
   }
-  assert.equal(used, (1n << 64n) - 1n, "every bit of the word is a field");
+  assert.equal(used[0], (1n << 64n) - 1n, "every bit of word 0 is a field");
+  assert.equal(used[1], (1n << 36n) - 1n, "word 1 uses bits 0-35, as in protocol.h");
 });
 
-test("rejects telemetry payloads that are not a 64-bit unsigned integer", () => {
+test("rejects telemetry payloads that are not one or two 64-bit unsigned integers", () => {
   assert.equal(parseTelemetryPayload("18446744073709551616"), null);
+  assert.equal(parseTelemetryPayload("1 18446744073709551616"), null);
   assert.equal(parseTelemetryPayload("-1"), null);
   assert.equal(parseTelemetryPayload("0x10"), null);
-  assert.equal(parseTelemetryPayload("18446744073709551615"), 2n ** 64n - 1n);
+  assert.equal(parseTelemetryPayload("1 2 3"), null);
+  assert.equal(parseTelemetryPayload(""), null);
+  assert.deepEqual(parseTelemetryPayload("18446744073709551615"), [2n ** 64n - 1n]);
+  assert.deepEqual(parseTelemetryPayload(" 1  2\n"), [1n, 2n]);
+});
+
+test("parses the car's hump and barcode events", () => {
+  assert.deepEqual(parseEvent("0 42 0 9"), { type: "hump", heightMm: 42, over: false, tiltDeg: 9 });
+  assert.deepEqual(parseEvent("0 127 1 31"), { type: "hump", heightMm: 127, over: true, tiltDeg: 31 });
+  assert.deepEqual(parseEvent("1 65"), { type: "barcode", letter: "A" });
+  for (const bad of ["", "hump", "0 200 0 0", "1 0", "1 200", "7 1"]) {
+    assert.equal(parseEvent(bad), null, JSON.stringify(bad));
+  }
 });
 
 test("command text round-trips with the car's rules", () => {
