@@ -6,6 +6,7 @@
  */
 import { useState } from "react";
 import { BROADCAST_ID, COMMANDS, SETTINGS, formatCommand, type MessageDef } from "../shared/protocol.ts";
+import { BarcodePanel } from "./BarcodePanel.tsx";
 
 type Send = (carId: string, leaf: "cmd" | "config", text: string) => void;
 
@@ -40,6 +41,8 @@ export function CommandPanel({ carId, disabled, send }: Props) {
       {SETTINGS.map((def) => (
         <MessageForm key={def.id} def={def} disabled={disabled} onSend={(text) => send(carId, "config", text)} />
       ))}
+
+      <BarcodePanel disabled={disabled} onSend={(text) => send(carId, "config", text)} />
 
       <h3>Raw</h3>
       <form
