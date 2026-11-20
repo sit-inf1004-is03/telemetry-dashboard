@@ -329,3 +329,27 @@ export function formatField(f: TelemetryField, raw: number): string {
   if (f.kind === "enum") return f.names?.[raw] ?? `#${raw}`;
   return f.unit ? `${raw} ${f.unit}` : String(raw);
 }
+
+// ---------------------------------------------------------------------------
+// Barcode plan (Ruien): what each barcode means at the next T, set on the day.
+// Settings on robocar/<id>/config, like CFG above; the car's protocol.h has
+// CFG_BARCODE_DIR 3, CFG_BARCODE_CLEAR 4, CFG_BARCODE_SHOW 5.  The car
+// answers each one on its log with the whole map, e.g. "barcodes: A=L K=R".
+// Drawn by components/BarcodePanel.tsx.
+// ---------------------------------------------------------------------------
+
+export const BARCODE_CFG = { DIR: 3, CLEAR: 4, SHOW: 5 } as const;
+
+/** Characters the car can map, '0'-'9' and 'A'-'Z', sent as ASCII codes. */
+export const BARCODE_CHARS = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+  .split("")
+  .map((c) => ({ value: c.charCodeAt(0), label: c }));
+
+/** What a barcode means at the next T: barcode_cmd_t in the car's line_barcode.h. */
+export const BARCODE_DIRS = [
+  { value: 0, label: "Left" },
+  { value: 1, label: "Right" },
+  { value: 2, label: "Straight" },
+  { value: 3, label: "U-turn" },
+  { value: 4, label: "Ignore" },
+];
