@@ -96,10 +96,12 @@ test("rejects telemetry payloads that are not one or two 64-bit unsigned integer
   assert.deepEqual(parseTelemetryPayload(" 1  2\n"), [1n, 2n]);
 });
 
-test("parses the car's hump and barcode events", () => {
+test("parses the car's hump, barcode and obstacle events", () => {
   assert.deepEqual(parseEvent("0 42 0 9"), { type: "hump", heightMm: 42, over: false, tiltDeg: 9 });
   assert.deepEqual(parseEvent("0 127 1 31"), { type: "hump", heightMm: 127, over: true, tiltDeg: 31 });
   assert.deepEqual(parseEvent("1 65"), { type: "barcode", letter: "A" });
+  assert.deepEqual(parseEvent("2 152 13 1"), { type: "obstacle", widthMm: 152, frontCm: 13, whole: true });
+  assert.deepEqual(parseEvent("2 300 14 0"), { type: "obstacle", widthMm: 300, frontCm: 14, whole: false });
   for (const bad of ["", "hump", "0 200 0 0", "1 0", "1 200", "7 1"]) {
     assert.equal(parseEvent(bad), null, JSON.stringify(bad));
   }

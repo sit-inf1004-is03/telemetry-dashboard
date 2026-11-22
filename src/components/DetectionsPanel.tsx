@@ -1,6 +1,7 @@
 /**
- * What the car found on the course: humps (from the IMU) and barcodes (from
- * Line Following), as two cards and one list in the order they happened.
+ * What the car found on the course: humps (from the IMU), barcodes (from
+ * Line Following) and obstacle widths (from Obstacle Scan), as cards and one
+ * list in the order they happened.
  *
  * The tallest hump is kept by the dashboard, from the hump events it has
  * received since the page opened or since "Reset". The latest barcode comes
@@ -14,6 +15,7 @@ import type { Car, Detection, HumpDetection } from "../useRobocars.ts";
 export function DetectionsPanel({ car, resetTallest }: { car: Car; resetTallest: (carId: string) => void }) {
   const tallest = car.tallestHump;
   const barcode = latestBarcode(car);
+  const obstacle = latestObstacle(car);
 
   return (
     <section className="panel">
@@ -42,6 +44,17 @@ export function DetectionsPanel({ car, resetTallest }: { car: Car; resetTallest:
             </div>
           )}
         </div>
+        <div className="tile">
+          <div className="tile-label">Obstacle width</div>
+          <div className="tile-value">
+            {obstacle ? obstacleWidth(obstacle) : <span className="muted">none yet</span>}
+          </div>
+          {obstacle && (
+            <div className="tile-foot muted small">
+              {obstacle.frontCm} cm ahead, at {obstacle.time.toLocaleTimeString()}
+            </div>
+          )}
+        </div>
       </div>
       <DetectionList detections={car.detections} />
     </section>
@@ -65,11 +78,15 @@ function DetectionList({ detections }: { detections: Detection[] }) {
         stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 20;
       }}
     >
-      {detections.length === 0 && <p className="muted">No hump or barcode yet.</p>}
+      {detections.length === 0 && <p className="muted">No hump, barcode or obstacle yet.</p>}
       {detections.map((d, i) => (
         <div key={i} className="log-line">
           <time>{d.time.toLocaleTimeString()}</time> <span className={`badge ${d.type}`}>{d.type}</span>{" "}
-          {d.type === "hump" ? `${humpHeight(d)}, tilt ${d.tiltDeg}°` : barcodeText(d.letter)}
+          {d.type === "hump"
+            ? `${humpHeight(d)}, tilt ${d.tiltDeg}°`
+            : d.type === "obstacle"
+              ? `${obstacleWidth(d)} wide, ${d.frontCm} cm ahead`
+              : barcodeText(d.letter)}
         </div>
       ))}
     </div>
@@ -88,6 +105,21 @@ function latestBarcode(car: Car): { letter: string; time?: Date } | undefined {
   if (!code) return undefined;
   const letter = String.fromCharCode(code);
   return { letter, time: event?.letter === letter ? event.time : undefined };
+}
+
+type ObstacleDetection = Extract<Detection, { type: "obstacle" }>;
+
+function latestObstacle(car: Car): ObstacleDetection | undefined {
+  for (let i = car.detections.length - 1; i >= 0; i--) {
+    const d = car.detections[i];
+    if (d.type === "obstacle") return d;
+  }
+  return undefined;
+}
+
+function obstacleWidth(o: ObstacleDetection) {
+  const cm = (o.widthMm / 10).toFixed(1);
+  return o.whole ? `${cm} cm` : `at least ${cm} cm`;
 }
 
 function humpHeight(h: HumpDetection) {

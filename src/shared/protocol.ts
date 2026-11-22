@@ -127,7 +127,7 @@ export function parseCommand(text: string): { id: number; args: number[] } | nul
 // Events (robocar/<id>/event): EVT_* in protocol.h. Same format as a command.
 // ---------------------------------------------------------------------------
 
-export const EVT = { HUMP: 0, BARCODE: 1 } as const;
+export const EVT = { HUMP: 0, BARCODE: 1, OBSTACLE: 2 } as const;
 
 /** What a barcode letter tells Navigation to do (barcode.c, letter_to_cmd) */
 export const BARCODE_COMMANDS: Record<string, string> = { A: "left", B: "right", C: "straight", D: "U-turn" };
@@ -135,7 +135,9 @@ export const BARCODE_COMMANDS: Record<string, string> = { A: "left", B: "right",
 export type CarEvent =
   /** heightMm is 127 with `over` set when the hump was higher than 127 mm */
   | { type: "hump"; heightMm: number; over: boolean; tiltDeg: number }
-  | { type: "barcode"; letter: string };
+  | { type: "barcode"; letter: string }
+  /** Obstacle Scan's width sweep (Ruien); `whole` is false when an edge was past the sweep ("at least") */
+  | { type: "obstacle"; widthMm: number; frontCm: number; whole: boolean };
 
 /** "0 42 0 9" -> a 42 mm hump, "1 65" -> barcode A, or null for anything else. */
 export function parseEvent(text: string): CarEvent | null {
@@ -144,6 +146,7 @@ export function parseEvent(text: string): CarEvent | null {
   const [a = 0, b = 0, c = 0] = msg.args;
   if (msg.id === EVT.HUMP && a >= 0 && a <= 127) return { type: "hump", heightMm: a, over: b !== 0, tiltDeg: c };
   if (msg.id === EVT.BARCODE && a > 32 && a < 127) return { type: "barcode", letter: String.fromCharCode(a) };
+  if (msg.id === EVT.OBSTACLE && a >= 0 && a < 10000) return { type: "obstacle", widthMm: a, frontCm: b, whole: c !== 0 };
   return null;
 }
 

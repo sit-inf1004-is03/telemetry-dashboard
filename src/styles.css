@@ -364,3 +364,6 @@ button.link:hover {
 .badge.barcode {
   color: var(--text-secondary);
 }
+.badge.obstacle {
+  color: var(--bad);
+}
