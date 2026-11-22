@@ -85,7 +85,11 @@ the IMU's motion (stationary, accelerating, cruising, turning) and terrain
 Humps and barcodes also come as events on `robocar/<id>/event`, once each.
 The Detections panel lists them in order, shows the latest barcode (from the
 telemetry too, so it survives a missed event) and keeps the tallest hump
-since the page opened; Reset forgets it, e.g. before a new run.
+since the page opened; Reset forgets it, e.g. before a new run. What a
+barcode means comes from the car's own barcode map: the dashboard asks for
+it (setting 5) whenever a car comes online, and the car answers that and
+every Barcode plan change on its log with `barcodes: A=L K=R`. Until that
+answer arrives, a barcode shows without a meaning rather than a guess.
 
 Commands are Ping, and Start, Stop and Clear faults, which the car passes to
 its Navigation. The full bit layout is in the firmware's `MQTT.md`. If the car

@@ -10,12 +10,16 @@
  * Start makes it follow the line; now and then it meets an obstacle, stops,
  * goes around it and finds the line again, and sometimes does not and stops
  * in FAULT until Clear faults. Stop brakes it. On the way it rides over
- * humps and reads barcodes (A-D, each followed by a junction), and reports
- * them as events. Telemetry is packed exactly as
+ * humps and reads barcodes, and reports them as events. Like the car, it
+ * keeps a barcode map (A-D left, right, straight, U-turn at power-on),
+ * changed by the Barcode plan settings and reported on its log as
+ * "barcodes: A=L ..."; a mapped barcode is followed by a junction, an
+ * ignored one is not. Telemetry is packed exactly as
  * app_program/telemetry/telemetry.c does.
  */
 import mqtt from "mqtt";
 import {
+  BARCODE_CFG,
   BROADCAST_ID,
   CFG,
   CMD,
@@ -25,6 +29,7 @@ import {
   STATUS_ONLINE,
   TELEMETRY_LAYOUT,
   encodeTelemetry,
+  formatBarcodeMap,
   formatCommand,
   formatTelemetryPayload,
   parseCommand,
@@ -43,6 +48,9 @@ const LINE = { ON: 0, LOST: 1, SEARCHING: 2 } as const;
 // imu_pack.h
 const IMU_MOTION = { STATIONARY: 0, ACCELERATING: 1, CRUISING: 2, TURNING: 3 } as const;
 const TERRAIN = { LEVEL: 0, CLIMBING: 1, DESCENDING: 2, HUMP_CLOSED: 3 } as const;
+// line_barcode.h barcode_cmd_t: 0 left, 1 right, 2 straight, 3 U-turn, 4 ignore
+const BARCODE_IGNORE = 4;
+const BARCODE_DEFAULTS: Record<string, number> = { A: 0, B: 1, C: 2, D: 3 };
 
 const car = {
   state: STATE.IDLE as number,
@@ -59,6 +67,7 @@ const car = {
   distanceCm: 0,
   barcode: 0, // ASCII code of the last letter read
   barcodeCount: 0,
+  barcodeMap: { ...BARCODE_DEFAULTS } as Record<string, number>, // character -> barcode_cmd_t; others ignored
   stateTicks: 0, // samples spent in the current state
   seq: 0,
   periodMs: 1000,
@@ -103,13 +112,25 @@ function sendEvent(id: number, args: number[]) {
   client.publish(topics.event(carId), formatCommand(id, args));
 }
 
-/** Line Following reads a barcode A-D; Navigation turns at the junction after it */
-function readBarcode() {
-  const letter = "ABCD"[Math.floor(Math.random() * 4)];
+const DIR_NAMES = ["LEFT", "RIGHT", "STRAIGHT", "U-TURN", "NONE"];
+
+/**
+ * Line Following reads a barcode: mostly one the map gives a direction,
+ * sometimes one it ignores. Returns true if Navigation should act on it at
+ * the junction after it.
+ */
+function readBarcode(): boolean {
+  const mapped = Object.keys(car.barcodeMap).filter((c) => car.barcodeMap[c] !== BARCODE_IGNORE);
+  const letter =
+    mapped.length > 0 && Math.random() < 0.85
+      ? mapped[Math.floor(Math.random() * mapped.length)]
+      : "EFGXYZ"[Math.floor(Math.random() * 6)];
+  const dir = car.barcodeMap[letter] ?? BARCODE_IGNORE;
   car.barcode = letter.charCodeAt(0);
   car.barcodeCount = (car.barcodeCount + 1) & 0xf;
-  log(`[BC] read *${letter}* (simulated)`);
+  log(`[BC] read *${letter}* -> ${DIR_NAMES[dir]} (simulated)`);
   sendEvent(EVT.BARCODE, [car.barcode]);
+  return dir !== BARCODE_IGNORE;
 }
 
 /** Obstacle Scan's width sweep (Ruien): a 10-15 cm box, about as the car reports it */
@@ -181,7 +202,8 @@ function runCommand(id: number, [a0 = 0]: number[], from: string) {
   }
 }
 
-function applySetting(id: number, [value = 0]: number[]) {
+function applySetting(id: number, args: number[]) {
+  const [value = 0] = args;
   if (id === CFG.TELEMETRY_PERIOD) {
     if (value < 100 || value > 60000) return log(`telemetry: period ${value} ms is outside 100..60000`);
     car.periodMs = value;
@@ -192,6 +214,21 @@ function applySetting(id: number, [value = 0]: number[]) {
     car.enabled = value !== 0;
     return log(`telemetry: ${car.enabled ? "on" : "off"}`);
   }
+  // The barcode settings: each answers with the whole map, as telemetry.c does
+  if (id === BARCODE_CFG.DIR) {
+    const [code = -1, dir = -1] = args;
+    const letter = String.fromCharCode(code);
+    if (!/^[0-9A-Z]$/.test(letter) || dir < 0 || dir > BARCODE_IGNORE) {
+      return log("telemetry: barcode setting needs <'0'-'9' or 'A'-'Z' as ASCII code> <0-4>");
+    }
+    car.barcodeMap[letter] = dir;
+    return log(formatBarcodeMap(car.barcodeMap));
+  }
+  if (id === BARCODE_CFG.CLEAR) {
+    car.barcodeMap = {};
+    return log(formatBarcodeMap(car.barcodeMap));
+  }
+  if (id === BARCODE_CFG.SHOW) return log(formatBarcodeMap(car.barcodeMap));
   log(`telemetry: unknown setting ${id}`);
 }
 
@@ -217,8 +254,8 @@ function step() {
       if (car.obstacleCm !== 511) car.obstacleCm -= 25;
       if (car.obstacleCm !== 511 && car.obstacleCm <= 20) enter(STATE.OBSTACLE);
       else if (seconds > 4 && Math.random() < 0.05) {
-        readBarcode();
-        enter(STATE.JUNCTION);
+        if (readBarcode()) enter(STATE.JUNCTION);
+        else car.stateTicks = 0; // ignored: keep following, no barcode again for a while
       }
       break;
     case STATE.JUNCTION:

@@ -7,9 +7,14 @@
  * received since the page opened or since "Reset". The latest barcode comes
  * from the newest of the last barcode event and the telemetry, which repeats
  * the last letter in every sample, so it shows even if the event was missed.
+ *
+ * What a barcode means comes from the car's own barcode map (car.barcodeMap,
+ * reported on its log at start-up and after every Barcode plan change), never
+ * from a list in the dashboard: each read in the list shows the map as it
+ * was then, the latest-barcode card the map now.
  */
 import { useEffect, useRef } from "react";
-import { BARCODE_COMMANDS } from "../shared/protocol.ts";
+import { barcodeMeaning } from "../shared/protocol.ts";
 import type { Car, Detection, HumpDetection } from "../useRobocars.ts";
 
 export function DetectionsPanel({ car, resetTallest }: { car: Car; resetTallest: (carId: string) => void }) {
@@ -36,11 +41,16 @@ export function DetectionsPanel({ car, resetTallest }: { car: Car; resetTallest:
         <div className="tile">
           <div className="tile-label">Latest barcode</div>
           <div className="tile-value">
-            {barcode ? barcodeText(barcode.letter) : <span className="muted">none yet</span>}
+            {barcode ? (
+              barcodeText(barcode.letter, barcodeMeaning(car.barcodeMap, barcode.letter))
+            ) : (
+              <span className="muted">none yet</span>
+            )}
           </div>
           {barcode && (
             <div className="tile-foot muted small">
               {barcode.time ? `read at ${barcode.time.toLocaleTimeString()}` : "read before this page opened"}
+              {!car.barcodeMap && "; meaning unknown until the car reports its barcode map"}
             </div>
           )}
         </div>
@@ -86,7 +96,7 @@ function DetectionList({ detections }: { detections: Detection[] }) {
             ? `${humpHeight(d)}, tilt ${d.tiltDeg}°`
             : d.type === "obstacle"
               ? `${obstacleWidth(d)} wide, ${d.frontCm} cm ahead`
-              : barcodeText(d.letter)}
+              : barcodeText(d.letter, d.meaning)}
         </div>
       ))}
     </div>
@@ -126,7 +136,7 @@ function humpHeight(h: HumpDetection) {
   return h.over ? `over ${h.heightMm} mm` : `${h.heightMm} mm`;
 }
 
-function barcodeText(letter: string) {
-  const command = BARCODE_COMMANDS[letter];
-  return command ? `*${letter}* → ${command}` : `*${letter}*`;
+/** "*A* → Left", "*K* → Ignored", or "*A*" while the car's map is not known */
+function barcodeText(letter: string, meaning: string | undefined) {
+  return meaning ? `*${letter}* → ${meaning}` : `*${letter}*`;
 }
