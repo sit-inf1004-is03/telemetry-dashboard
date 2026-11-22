@@ -112,6 +112,14 @@ function readBarcode() {
   sendEvent(EVT.BARCODE, [car.barcode]);
 }
 
+/** Obstacle Scan's width sweep (Ruien): a 10-15 cm box, about as the car reports it */
+function measureObstacle() {
+  const widthMm = 100 + Math.round(Math.random() * 50);
+  const frontCm = 12 + Math.round(Math.random() * 3);
+  log(`[S5] WIDTH: ${(widthMm / 10).toFixed(1)} cm (simulated, front ${frontCm} cm)`);
+  sendEvent(EVT.OBSTACLE, [widthMm, frontCm, 1]);
+}
+
 /** The IMU's terrain region: level -> climbing -> descending -> hump closed -> level */
 function stepTerrain() {
   switch (car.terrain) {
@@ -222,7 +230,10 @@ function step() {
     case STATE.OBSTACLE: // braked; Obstacle Scan scans
       car.motion = MOTION.IDLE;
       car.speedLeft = car.speedRight = 0;
-      if (seconds >= 2) enter(STATE.BYPASS);
+      if (seconds >= 2) {
+        measureObstacle();
+        enter(STATE.BYPASS);
+      }
       break;
     case STATE.BYPASS:
       car.motion = seconds < 1 ? MOTION.PIVOT : MOTION.STRAIGHT;
