@@ -93,7 +93,7 @@ export const SETTINGS: MessageDef[] = [
     id: CFG.TELEMETRY_PERIOD,
     name: "Telemetry period",
     description: "Time between telemetry samples.",
-    args: [{ name: "period", min: 100, max: 60000, default: 1000, unit: "ms" }],
+    args: [{ name: "period", min: 100, max: 60000, default: 500, unit: "ms" }],
   },
   {
     id: CFG.TELEMETRY_ENABLE,

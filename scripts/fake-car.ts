@@ -70,11 +70,12 @@ const car = {
   barcodeMap: { ...BARCODE_DEFAULTS } as Record<string, number>, // character -> barcode_cmd_t; others ignored
   stateTicks: 0, // samples spent in the current state
   seq: 0,
-  periodMs: 1000,
+  periodMs: 500, // telemetry.c PERIOD_DEFAULT_MS
   enabled: true,
   wasOnline: false,
 };
 let sampleTimer: NodeJS.Timeout | undefined;
+const FIRST_SAMPLE_MS = 300; // telemetry.c: after coming online
 
 const client = mqtt.connect(brokerUrl, {
   clientId: carId,
@@ -93,7 +94,7 @@ client.on("connect", () => {
   client.subscribe([topics.cmd(carId), topics.cmd(BROADCAST_ID), topics.config(carId)], { qos: 1 });
   client.publish(topics.status(carId), STATUS_ONLINE, { qos: 1, retain: true });
   log(`net: online as ${carId} (simulated)`);
-  restartSampling();
+  restartSampling(FIRST_SAMPLE_MS);
 });
 client.on("error", (err) => console.error(`mqtt: ${err.message}`));
 
@@ -232,9 +233,14 @@ function applySetting(id: number, args: number[]) {
   log(`telemetry: unknown setting ${id}`);
 }
 
-function restartSampling() {
-  clearInterval(sampleTimer);
-  sampleTimer = setInterval(sample, car.periodMs);
+/** As telemetry.c: the first sample soon after (re)connecting, then one every period */
+function restartSampling(firstMs = car.periodMs) {
+  clearTimeout(sampleTimer);
+  const tick = () => {
+    sample();
+    sampleTimer = setTimeout(tick, car.periodMs);
+  };
+  sampleTimer = setTimeout(tick, firstMs);
 }
 
 const jitter = (n: number) => n + Math.round((Math.random() - 0.5) * n * 0.2);
