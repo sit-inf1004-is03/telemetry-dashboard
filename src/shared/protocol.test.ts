@@ -3,10 +3,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   CMD,
+  barcodeMeaning,
   decodeTelemetry,
   encodeTelemetry,
+  formatBarcodeMap,
   formatCommand,
   formatTelemetryPayload,
+  parseBarcodeMap,
   parseCommand,
   parseEvent,
   parseTelemetryPayload,
@@ -120,4 +123,26 @@ test("parses robocar topics", () => {
   assert.deepEqual(parseTopic("robocar/robocar-01/log"), { carId: "robocar-01", leaf: "log" });
   assert.equal(parseTopic("robocar/x"), null);
   assert.equal(parseTopic("other/x/log"), null);
+});
+
+test("reads the car's barcode map from its log line (telemetry.c, barcode_map_text)", () => {
+  const map = parseBarcodeMap("barcodes: A=L B=R K=S 7=U");
+  assert.deepEqual(map, { dirs: { A: "Left", B: "Right", K: "Straight", "7": "U-turn" }, complete: true });
+  assert.equal(barcodeMeaning(map!, "K"), "Straight");
+  assert.equal(barcodeMeaning(map!, "Z"), "Ignored");
+  assert.equal(barcodeMeaning(undefined, "A"), undefined, "no map yet: meaning unknown, not a guess");
+
+  assert.deepEqual(parseBarcodeMap("barcodes: none (all ignored)"), { dirs: {}, complete: true });
+  const cut = parseBarcodeMap("barcodes: 0=L 1=R ...");
+  assert.equal(cut?.complete, false);
+  assert.equal(barcodeMeaning(cut!, "Z"), undefined, "past the cut: unknown");
+
+  assert.equal(parseBarcodeMap("[BC] read *A* -> LEFT"), null);
+  assert.equal(parseBarcodeMap("barcodes: A=Q"), null);
+});
+
+test("the simulated car writes the map as the car does", () => {
+  assert.equal(formatBarcodeMap({ A: 0, B: 1, C: 2, D: 3, E: 4 }), "barcodes: A=L B=R C=S D=U");
+  assert.equal(formatBarcodeMap({ K: 1, "3": 0 }), "barcodes: 3=L K=R");
+  assert.equal(formatBarcodeMap({}), "barcodes: none (all ignored)");
 });

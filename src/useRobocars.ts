@@ -5,17 +5,27 @@
  * server/main.ts), subscribes to every car's status, telemetry, events and log, and
  * keeps one Car record per car id it sees. Components only read that state
  * and call send(); nothing else in the dashboard touches MQTT.
+ *
+ * When a car comes online (or is already online when the page opens), the
+ * dashboard asks it for its barcode map (CFG_BARCODE_SHOW). The car answers
+ * that, and every barcode setting, with a "barcodes: ..." log line, which
+ * the reducer keeps as car.barcodeMap.
  */
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import mqtt, { type MqttClient } from "mqtt";
 import {
+  BARCODE_CFG,
   BROADCAST_ID,
   STATUS_ONLINE,
+  barcodeMeaning,
   decodeTelemetry,
+  formatCommand,
+  parseBarcodeMap,
   parseEvent,
   parseTelemetryPayload,
   parseTopic,
   topics,
+  type BarcodeMap,
   type CarEvent,
   type Telemetry,
 } from "./shared/protocol.ts";
@@ -34,8 +44,12 @@ export interface LogLine {
   kind: "car" | "sent";
 }
 
-/** A hump or barcode the car reported (robocar/<id>/event) */
-export type Detection = CarEvent & { time: Date };
+/**
+ * A hump, barcode or obstacle the car reported (robocar/<id>/event). A
+ * barcode carries what it meant to the car when it was read (its barcode
+ * map then), if the map was known.
+ */
+export type Detection = CarEvent & { time: Date; meaning?: string };
 export type HumpDetection = Extract<Detection, { type: "hump" }>;
 
 export interface Car {
@@ -52,6 +66,8 @@ export interface Car {
   detections: Detection[];
   /** the highest hump since the page opened or the last resetTallest() */
   tallestHump?: HumpDetection;
+  /** the car's barcode map, from its last "barcodes: ..." log line; unknown until then */
+  barcodeMap?: BarcodeMap;
 }
 
 type Cars = Record<string, Car>;
@@ -108,13 +124,17 @@ function reducer(cars: Cars, action: Action): Cars {
         [car.id]: {
           ...car,
           logs: keepLast(car.logs, { time: action.time, text: action.text, kind: "car" }, LOG_LENGTH),
+          barcodeMap: parseBarcodeMap(action.text) ?? car.barcodeMap,
         },
       };
 
     case "event": {
       const event = parseEvent(action.text);
       if (!event) return cars;
-      const detection: Detection = { ...event, time: action.time };
+      const detection: Detection =
+        event.type === "barcode"
+          ? { ...event, time: action.time, meaning: barcodeMeaning(car.barcodeMap, event.letter) }
+          : { ...event, time: action.time };
       return {
         ...cars,
         [car.id]: {
@@ -167,7 +187,23 @@ export function useRobocars() {
     client.on("reconnect", () => setConnection("connecting"));
     client.on("close", () => setConnection("disconnected"));
     client.on("message", (topic, payload) => {
-      dispatch({ type: "message", topic, text: payload.toString(), time: new Date() });
+      const text = payload.toString();
+      dispatch({ type: "message", topic, text, time: new Date() });
+
+      // A car came online, or was online when the page opened (its retained
+      // status): ask for its barcode map, which it starts with on power-up
+      // and keeps until it restarts.
+      const parsed = parseTopic(topic);
+      if (parsed?.leaf === "status" && parsed.carId !== BROADCAST_ID && text === STATUS_ONLINE) {
+        const ask = formatCommand(BARCODE_CFG.SHOW, []);
+        client.publish(topics.config(parsed.carId), ask, { qos: 1, retain: false });
+        dispatch({
+          type: "sent",
+          carId: parsed.carId,
+          text: `sent config "${ask}" to ${parsed.carId} (asking for its barcode map)`,
+          time: new Date(),
+        });
+      }
     });
 
     return () => {

@@ -129,9 +129,6 @@ export function parseCommand(text: string): { id: number; args: number[] } | nul
 
 export const EVT = { HUMP: 0, BARCODE: 1, OBSTACLE: 2 } as const;
 
-/** What a barcode letter tells Navigation to do (barcode.c, letter_to_cmd) */
-export const BARCODE_COMMANDS: Record<string, string> = { A: "left", B: "right", C: "straight", D: "U-turn" };
-
 export type CarEvent =
   /** heightMm is 127 with `over` set when the hump was higher than 127 mm */
   | { type: "hump"; heightMm: number; over: boolean; tiltDeg: number }
@@ -356,3 +353,56 @@ export const BARCODE_DIRS = [
   { value: 3, label: "U-turn" },
   { value: 4, label: "Ignore" },
 ];
+
+/**
+ * The car's barcode map, as its log reports it: "barcodes: A=L K=R" (L left,
+ * R right, S straight, U U-turn; telemetry.c, barcode_map_text()). Every
+ * character not listed is ignored. The car answers every barcode setting
+ * with this line, so the dashboard asks for it (BARCODE_CFG.SHOW) when a car
+ * comes online and learns the map from the answer.
+ */
+export interface BarcodeMap {
+  /** direction label (BARCODE_DIRS) per character, e.g. { A: "Left" } */
+  dirs: Record<string, string>;
+  /** false when the car cut the line short (" ..."): unlisted characters are then unknown, not ignored */
+  complete: boolean;
+}
+
+const BARCODE_MAP_PREFIX = "barcodes:";
+const BARCODE_MAP_LETTERS = "LRSU"; // index = BARCODE_DIRS value
+
+/** The car's map from its log line, or null if the line is not one. */
+export function parseBarcodeMap(line: string): BarcodeMap | null {
+  if (!line.startsWith(BARCODE_MAP_PREFIX)) return null;
+  const rest = line.slice(BARCODE_MAP_PREFIX.length).trim();
+  if (rest.startsWith("none")) return { dirs: {}, complete: true };
+  const dirs: Record<string, string> = {};
+  let complete = true;
+  for (const item of rest.split(/\s+/).filter(Boolean)) {
+    if (item === "...") {
+      complete = false;
+      continue;
+    }
+    const m = /^([0-9A-Z])=([LRSU])$/.exec(item);
+    if (!m) return null;
+    dirs[m[1]] = BARCODE_DIRS[BARCODE_MAP_LETTERS.indexOf(m[2])].label;
+  }
+  return { dirs, complete };
+}
+
+/** The log line the car writes for a map (BARCODE_DIRS values per character); for the simulated car. */
+export function formatBarcodeMap(dirs: Record<string, number>): string {
+  const items = BARCODE_CHARS.filter((c) => (dirs[c.label] ?? 4) < 4).map(
+    (c) => ` ${c.label}=${BARCODE_MAP_LETTERS[dirs[c.label]]}`,
+  );
+  return BARCODE_MAP_PREFIX + (items.length ? items.join("") : " none (all ignored)");
+}
+
+/**
+ * What a barcode means to the car now: a direction label, "Ignored", or
+ * undefined while the map is not known (or was cut before this character).
+ */
+export function barcodeMeaning(map: BarcodeMap | undefined, letter: string): string | undefined {
+  if (!map) return undefined;
+  return map.dirs[letter] ?? (map.complete ? "Ignored" : undefined);
+}
