@@ -20,7 +20,7 @@ import {
 } from "./protocol.ts";
 
 // The same sample as tests CO-U05 and CO-U10 in the car
-// (app_program/comms/comms_test.c). If this fails, protocol.ts and protocol.h disagree.
+// (app_program/subsystem1/comms/comms_test.c). If this fails, protocol.ts and protocol.h disagree.
 const GOLDEN_TEXT = "11213681551648818218 8090835030";
 const GOLDEN_WORD0_FIELDS = {
   seq: 42,
