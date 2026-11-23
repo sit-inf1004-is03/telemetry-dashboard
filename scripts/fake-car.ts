@@ -15,7 +15,7 @@
  * changed by the Barcode plan settings and reported on its log as
  * "barcodes: A=L ..."; a mapped barcode is followed by a junction, an
  * ignored one is not. Telemetry is packed exactly as
- * app_program/telemetry/telemetry.c does.
+ * app_program/subsystem1/telemetry/telemetry.c does.
  */
 import mqtt from "mqtt";
 import {

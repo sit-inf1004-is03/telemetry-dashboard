@@ -2,7 +2,7 @@
  * What the car and the dashboard say to each other over MQTT.
  *
  * THE CAR HAS A COPY OF THIS FILE:
- *     INF2004_ProjectTemplate/app_program/protocol.h
+ *     INF2004_ProjectTemplate/app_program/subsystem1/protocol.h
  * Change both together, or the two sides will disagree.
  *
  * Used by the dashboard (browser), the broker's console log and the

@@ -108,9 +108,9 @@ dashboard draws itself from it:
 - **New command or setting:** add an entry to `COMMANDS` or `SETTINGS`. A form
   row with one input per argument appears.
 
-Then make the same change in the car's `app_program/protocol.h` and in the task
+Then make the same change in the car's `app_program/subsystem1/protocol.h` and in the task
 that handles it, and update the golden sample in `protocol.test.ts` and the
-car's `app_program/comms/comms_test.c` if the telemetry layout changed. `npm test` and the
+car's `app_program/subsystem1/comms/comms_test.c` if the telemetry layout changed. `npm test` and the
 car's `make NET=lwip TEST=1` build both check that sample, so a mismatch shows
 up as a failing test rather than wrong numbers on screen.
 
